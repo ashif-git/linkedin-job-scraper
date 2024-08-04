@@ -10,7 +10,7 @@ from time import sleep
 from bs4 import BeautifulSoup
 
 MESSAGE = """
-    # LinkedIn Jobs Scrapper, Dumps jobs in Excel
+    # LinkedIn Jobs Scraper, Dumps jobs in Excel
     # Running Python Version: {}
     # Require >= Python 3.12.0
     """
