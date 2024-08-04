@@ -196,7 +196,7 @@ if __name__ == "__main__":
     print("================================================")
     print(MESSAGE.format(platform.python_version()))
     print("================================================")
-    print("Start Your Job Scrapping !!!")
+    print("Start Your Job Scraping !!!")
     print(" i.e.,   SQL Developer")
     print("         Chennai, Tamil Nadu")
     print("   *** All the Best ***     ")
