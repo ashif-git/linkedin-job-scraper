@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+import inspect
 import requests
 import platform
 import validators
@@ -15,26 +16,33 @@ MESSAGE = """
     # Require >= Python 3.12.0
     """
 
-def http_request(url, url_descp=None, max_retries=6, delay=6, attempt=1):
+def http_request(url, url_descp=None, max_retries=6, delay=6, retry_attempt=1):
     try:
-        resp = requests.get(url)
+        resp = requests.get(url, allow_redirects=False)
         resp.raise_for_status()
         return resp
     except (requests.HTTPError, requests.ConnectionError) as e:
-        if attempt > max_retries:
-            print(f"[#] - Max retries exceeded for {url_descp} URL: {url}")
-            raise f"[{url_descp}]: {e}"
+        print(f"[#] - Attempt {retry_attempt} failed on processing {url_descp} Request: {e}")
+        if retry_attempt > max_retries:
+            max_retries_exc = f"Max retries exceeded for {url_descp} URL: {url}"
+            raise Exception(max_retries_exc)
         else:
-            print(f"[#] - Attempt {attempt} failed, {resp.status_code} Error Occurred. Sleeping for {delay} seconds, to Retry!")
             sleep(delay)
-            print(f"[#] - Retrying the request: '{resp.url}'")
-            return http_request(url, url_descp, max_retries, delay, attempt + 1)
+            print(f"[#] - Retrying the request, after {delay} seconds!")
+            return http_request(url, url_descp, max_retries, delay, retry_attempt + 1)
 
 def extract_emails(text):
     email_regex = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}"
     email_list_ = re.findall(email_regex, str(text))
     
     return "NA" if len(email_list_) == 0 else ",".join(email_list_)
+
+def extract_urls(text):
+    """Regex pattern to match http and https URLs"""
+    url_regex = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    url_list_ = re.findall(url_regex, str(text))
+    
+    return [] if len(url_list_) == 0 else url_list_
 
 def list_to_dict(data):
     if isinstance(data, list) == False:
@@ -44,12 +52,19 @@ def list_to_dict(data):
     dct = dict(zip(itr, itr))
     
     return dct
+
+def filter_list_substring(list_dt, sub_str):
+    def carries_substring(index_str):
+        return sub_str in str(index_str)
     
+    return list(filter(carries_substring, list_dt))
+
 def get_jobs(url):
     try:
         resp = http_request(url, "Job ID")
     except Exception as e:
-        print(e)
+        current_func = str(inspect.stack()[0].function).upper()
+        print(f"[{current_func}][Exception]: {e}")
         return None
     
     """
@@ -63,24 +78,21 @@ def get_jobs(url):
     if data == None:
         return None
     
-    try:
-        data_str = str(data.text)
-        jb_rectr = str(data.find("h3", class_="base-main-card__title").text).strip()
-        jb_descp = str(data.find("div", class_="show-more-less-html__markup").text).strip()
-        jb_crita = str(data.find("ul", class_="description__job-criteria-list").text).strip().split("\n")
-        jb_crita = list_to_dict([x.strip() for x in jb_crita if x.strip() != ""])
-        jb_email = extract_emails(data_str)
-    except (Exception, AttributeError) as e:
-        jb_rectr = "NA"
-        jb_descp = "NA"
-        jb_crita = {}
-        jb_email = "NA"
+    data_str = str(data.text)
+    jb_rectr = data.find("h3", class_="base-main-card__title")
+    jb_rectr = "NA" if jb_rectr == None else str(jb_rectr.text).strip()
+    jb_descp = data.find("div", class_="show-more-less-html__markup")
+    jb_descp = "NA" if jb_descp == None else str(jb_descp.text).strip().encode("utf-8")
+    jb_crita = data.find("ul", class_="description__job-criteria-list")
+    jb_crita = {} if jb_crita == None else str(jb_crita.text).strip().split("\n")
+    jb_crita = list_to_dict([x.strip() for x in jb_crita if x.strip() != ""])
+    jb_email = extract_emails(data_str)
     
     job_data = {
         "Recruiter": jb_rectr,
         "Email": jb_email,
         "Link": resp.url
-    } | jb_crita | {"Details": jb_descp.encode("utf-8")}
+    } | jb_crita
     
     return job_data
     
@@ -91,7 +103,8 @@ def scrap_jobs(num_page=1):
             url = f"https://www.linkedin.com/jobs/search/?keywords={keyword_}&location={location}&start={page * 25}"
             resp = http_request(url, "Job Query")
         except Exception as e:
-            print(f"Request failed after maximum retries: {e}")
+            current_func = str(inspect.stack()[0].function).upper()
+            print(f"[{current_func}][Exception]: {e}")
             continue
         
         """
@@ -106,6 +119,10 @@ def scrap_jobs(num_page=1):
             "div", 
             class_="base-card relative w-full hover:no-underline focus:no-underline base-card--link base-search-card base-search-card--link job-search-card"
         )
+        print(f"Total. Jobs: {len(jobs)}")
+        print("#########################")
+        print("\n\t[@] - ".join(filter_list_substring(extract_urls(resp.text), "linkedin.com/jobs/view/")))
+        print("#########################")
         
         for job in jobs:
             jb_nam = job.find("h3", class_="base-search-card__title").text.strip()
@@ -116,6 +133,9 @@ def scrap_jobs(num_page=1):
             
             """ -- Condition to collect, job post date if exist! -- """
             jb_dte = "NA" if (jb_dte == False or jb_dte == None) else jb_dte.get("datetime")
+            if jb_dte == "NA":
+                jb_dte_new = job.find("time", class_="job-search-card__listdate--new")
+                jb_dte = "NA" if (jb_dte_new == False or jb_dte_new == None) else jb_dte_new.get("datetime")
             
             """
             -- Condition to collect, job description detail from the job post id url. 
@@ -170,6 +190,15 @@ def dump_sheet(result_set_list, file_name=f"job_list"):
             "border": 1, 
             "border_color": "black"
         })
+        
+        """ 
+        -- Condition to mark hyperlinks, If it exists -- 
+        [REF]: https://xlsxwriter.readthedocs.io/worksheet.html#worksheet-write-url
+        """
+        if "Link" in df.columns:
+            link_col_num = df.columns.get_loc("Link")
+            for row_num, url in enumerate(df["Link"], start=1):
+                worksheet.write_url(row_num, link_col_num, url, string="Job_Post_URL")
         
         for column in df:
             column_length = max(df[column].astype(str).map(len).max(), len(column))
